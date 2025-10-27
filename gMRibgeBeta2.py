@@ -17,20 +17,30 @@ TOLERANCIA_SIMPLIFY = 0.001  # tolerância alta, sem perder qualidade visual
 # ====================================================
 # 3. 📁 Caminhos
 # ====================================================
-base_path = r"D:\GMR\2025\CENSO 2022\CODE PYTHON"
-shapefile_path = os.path.join(base_path, "MG_setores_CD2022.shp")
-data_xlsx_path = os.path.join(base_path, "DataMG.xlsx")
+import requests, zipfile, io
+
+# URL direta do shapefile zipado no Google Drive
+drive_shp_url = "https://drive.google.com/uc?export=download&id=1eWBDWBXToZYmXkeSfROU1rEdfLL9qLYd"
+drive_xlsx_url = "https://drive.google.com/uc?export=download&id=1ge7dKvhHRYxXWENAwnUAsWGzDdcOATvu"
 
 # ====================================================
 # 4. 🧠 Cache da leitura dos dados
 # ====================================================
+
 @st.cache_data
 def load_data():
-    gdf = gpd.read_file(shapefile_path)
+    # Download e leitura do SHAPE
+    r = requests.get(drive_shp_url)
+    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+        gdf = gpd.read_file(z)
     gdf["CD_SETOR"] = gdf["CD_SETOR"].astype(str)
-    df_data = pd.read_excel(data_xlsx_path, sheet_name="DataMG")
+
+    # Download do XLSX
+    r2 = requests.get(drive_xlsx_url)
+    df_data = pd.read_excel(io.BytesIO(r2.content), sheet_name="DataMG")
     df_data["CD_SETOR"] = df_data["CD_SETOR"].astype(str)
-    df_dict = pd.read_excel(data_xlsx_path, sheet_name="dictionary")
+    df_dict = pd.read_excel(io.BytesIO(r2.content), sheet_name="dictionary")
+
     df_dict.columns = (
         df_dict.columns
         .str.strip()
