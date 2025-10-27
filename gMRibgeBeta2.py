@@ -2,6 +2,10 @@
 # 1. 📚 Importação de bibliotecas
 # ====================================================
 import os
+import io
+import glob
+import zipfile
+import requests
 import pandas as pd
 import geopandas as gpd
 import streamlit as st
@@ -15,32 +19,42 @@ MAX_SETORES = 5200  # limite máximo de setores
 TOLERANCIA_SIMPLIFY = 0.001  # tolerância alta, sem perder qualidade visual
 
 # ====================================================
-# 3. 📁 Caminhos
+# 3. 📁 Caminhos (links Google Drive)
 # ====================================================
-import requests, zipfile, io
-
-# URL direta do shapefile zipado no Google Drive
 drive_shp_url = "https://drive.google.com/uc?export=download&id=1eWBDWBXToZYmXkeSfROU1rEdfLL9qLYd"
-drive_xlsx_url = "https://drive.google.com/uc?export=download&id=1ge7dKvhHRYxXWENAwnUAsWGzDdcOATvu"
+drive_xlsx_url = "https://docs.google.com/spreadsheets/d/1ge7dKvhHRYxXWENAwnUAsWGzDdcOATvu/export?format=xlsx"
 
 # ====================================================
 # 4. 🧠 Cache da leitura dos dados
 # ====================================================
-
 @st.cache_data
 def load_data():
-    # Download e leitura do SHAPE
+    # -------- 📥 Download e extração do ZIP do shapefile --------
+    zip_path = "MG_setores_CD2022.zip"
+    shp_dir = "MG_setores_CD2022"
+
+    # Baixa o zip do shapefile
     r = requests.get(drive_shp_url)
-    with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-        gdf = gpd.read_file(z)
+    r.raise_for_status()
+    with open(zip_path, "wb") as f:
+        f.write(r.content)
+
+    # Extrai todos os arquivos do shapefile
+    with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        zip_ref.extractall(shp_dir)
+
+    # Localiza o arquivo .shp extraído
+    shapefile_path = glob.glob(os.path.join(shp_dir, "*.shp"))[0]
+    gdf = gpd.read_file(shapefile_path)
     gdf["CD_SETOR"] = gdf["CD_SETOR"].astype(str)
 
-    # Download do XLSX
+    # -------- 📊 Download do XLSX --------
     r2 = requests.get(drive_xlsx_url)
+    r2.raise_for_status()
     df_data = pd.read_excel(io.BytesIO(r2.content), sheet_name="DataMG")
     df_data["CD_SETOR"] = df_data["CD_SETOR"].astype(str)
-    df_dict = pd.read_excel(io.BytesIO(r2.content), sheet_name="dictionary")
 
+    df_dict = pd.read_excel(io.BytesIO(r2.content), sheet_name="dictionary")
     df_dict.columns = (
         df_dict.columns
         .str.strip()
@@ -49,9 +63,12 @@ def load_data():
         .str.encode("ascii", errors="ignore")
         .str.decode("utf-8")
     )
+
     return gdf, df_data, df_dict
 
+# Carrega os dados com cache
 gdf, df_data, df_dict = load_data()
+
 
 # ====================================================
 # 5. 🔀 Merge preservando shapefile
