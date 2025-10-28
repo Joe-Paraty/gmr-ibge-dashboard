@@ -1,6 +1,7 @@
 streamlit
+pandas
 geopandas
+requests
+gdown
 folium
 streamlit-folium
-pandas
-requests

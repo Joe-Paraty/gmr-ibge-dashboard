@@ -6,6 +6,7 @@ import io
 import glob
 import zipfile
 import requests
+import gdown
 import pandas as pd
 import geopandas as gpd
 import streamlit as st
@@ -16,45 +17,37 @@ from streamlit_folium import st_folium
 # 2. 🧭 Parâmetros globais
 # ====================================================
 MAX_SETORES = 5200  # limite máximo de setores
-TOLERANCIA_SIMPLIFY = 0.001  # tolerância alta, sem perder qualidade visual
 
 # ====================================================
 # 3. 📁 Caminhos (links Google Drive)
 # ====================================================
-drive_shp_url = "https://drive.google.com/uc?export=download&id=1eWBDWBXToZYmXkeSfROU1rEdfLL9qLYd"
-drive_xlsx_url = "https://docs.google.com/spreadsheets/d/1ge7dKvhHRYxXWENAwnUAsWGzDdcOATvu/export?format=xlsx"
+# IDs dos arquivos no Google Drive
+DRIVE_SHP_ID = "1NlFEltDlaYxovkorCosZL3bYkryFfFzx"  # ZIP com shapefile
+DRIVE_XLSX_ID = "1ge7dKvhHRYxXWENAwnUAsWGzDdcOATvu"  # XLSX com dados e dicionário
 
 # ====================================================
 # 4. 🧠 Cache da leitura dos dados
 # ====================================================
 @st.cache_data
 def load_data():
-    # -------- 📥 Download e extração do ZIP do shapefile --------
-    zip_path = "MG_setores_CD2022.zip"
-    shp_dir = "MG_setores_CD2022"
+    # -------- 📥 1. Download do SHAPE (ZIP) --------
+    shp_url = f"https://drive.google.com/uc?id={DRIVE_SHP_ID}"
+    shp_output = "MG_setores_CD2022.zip"
+    gdown.download(shp_url, shp_output, quiet=True)
 
-    # Baixa o zip do shapefile
-    r = requests.get(drive_shp_url)
-    r.raise_for_status()
-    with open(zip_path, "wb") as f:
-        f.write(r.content)
-
-    # Extrai todos os arquivos do shapefile
-    with zipfile.ZipFile(zip_path, "r") as zip_ref:
-        zip_ref.extractall(shp_dir)
-
-    # Localiza o arquivo .shp extraído
-    shapefile_path = glob.glob(os.path.join(shp_dir, "*.shp"))[0]
-    gdf = gpd.read_file(shapefile_path)
+    shp_name_inside_zip = "MG_setores_CD2022.shp"
+    gdf = gpd.read_file(f"zip://{shp_output}!{shp_name_inside_zip}")
     gdf["CD_SETOR"] = gdf["CD_SETOR"].astype(str)
 
-    # -------- 📊 Download do XLSX --------
-    r2 = requests.get(drive_xlsx_url)
-    r2.raise_for_status()
-    df_data = pd.read_excel(io.BytesIO(r2.content), sheet_name="DataMG")
+    # -------- 📥 2. Download do XLSX --------
+    xlsx_url = f"https://drive.google.com/uc?export=download&id={DRIVE_XLSX_ID}"
+    r = requests.get(xlsx_url)
+    r.raise_for_status()
+
+    df_data = pd.read_excel(io.BytesIO(r.content), sheet_name="DataMG")
     df_data["CD_SETOR"] = df_data["CD_SETOR"].astype(str)
 
-    df_dict = pd.read_excel(io.BytesIO(r2.content), sheet_name="dictionary")
+    df_dict = pd.read_excel(io.BytesIO(r.content), sheet_name="dictionary")
     df_dict.columns = (
         df_dict.columns
         .str.strip()
@@ -66,17 +59,18 @@ def load_data():
 
     return gdf, df_data, df_dict
 
-# Carrega os dados com cache
+# ====================================================
+# 5. 📊 Carregar dados
+# ====================================================
 gdf, df_data, df_dict = load_data()
 
-
 # ====================================================
-# 5. 🔀 Merge preservando shapefile
+# 6. 🔀 Merge preservando shapefile
 # ====================================================
 gdf_merged = gdf.merge(df_data, on="CD_SETOR", how="left", suffixes=("", "_data"))
 
 # ====================================================
-# 6. 🧭 Preparação dos filtros e variáveis
+# 7. 🧭 Preparação dos filtros e variáveis
 # ====================================================
 dict_var = dict(zip(df_dict["descricao"], df_dict["variavel"]))
 descricao_list = list(dict_var.keys())
@@ -88,7 +82,7 @@ if "NM_RGINT" not in gdf_merged.columns:
 regioes = sorted(gdf_merged["NM_RGINT"].dropna().unique())
 
 # ====================================================
-# 7. 🌐 Interface Streamlit
+# 8. 🌐 Interface Streamlit
 # ====================================================
 st.set_page_config(page_title="GMR IBGE - Dashboard Censitário", layout="wide")
 st.title("🧭 Painel IBGE - Setores Censitários de MG")
@@ -98,12 +92,21 @@ variavel_desc = st.selectbox("📈 Selecione a variável:", descricao_list)
 variavel_cod = dict_var[variavel_desc]
 gdf_merged[variavel_cod] = pd.to_numeric(gdf_merged[variavel_cod], errors="coerce").fillna(0)
 
+# Slider para tolerância de simplificação
+tolerancia_simplify = st.slider(
+    "🎚️ Ajuste a tolerância da simplificação (quanto maior, mais leve o mapa):",
+    min_value=0.0001,
+    max_value=0.01,
+    value=0.001,
+    step=0.0001
+)
+
 # Região Intermediária
 nm_rgint_sel = st.selectbox("📍 Selecione a Região Intermediária:", regioes, index=0)
 gdf_rgint = gdf_merged[gdf_merged["NM_RGINT"] == nm_rgint_sel]
 
 # ====================================================
-# 8. 🏙️ Filtro de Município com valor agregado
+# 9. 🏙️ Filtro de Município com valor agregado
 # ====================================================
 agg_mun = (
     gdf_rgint.groupby("NM_MUN")[variavel_cod]
@@ -117,7 +120,7 @@ nm_mun_sel = nm_mun_sel_label.split(" (")[0] if nm_mun_sel_label != "Nenhum" els
 gdf_mun = gdf_rgint[gdf_rgint["NM_MUN"] == nm_mun_sel] if nm_mun_sel != "Nenhum" else None
 
 # ====================================================
-# 9. 🧭 Filtros hierárquicos subsequentes
+# 10. 🧭 Filtros hierárquicos subsequentes
 # ====================================================
 dist_opts = sorted(gdf_mun["NM_DIST"].dropna().unique()) if gdf_mun is not None else []
 nm_dist_sel = st.selectbox("📍 Selecione o Distrito:", ["Nenhum"] + dist_opts) if gdf_mun is not None else "Nenhum"
@@ -128,7 +131,7 @@ nm_bairro_sel = st.selectbox("🏘️ Selecione o Bairro:", ["Nenhum"] + bairro_
 gdf_bairro = gdf_dist[gdf_dist["NM_BAIRRO"] == nm_bairro_sel] if nm_bairro_sel != "Nenhum" else None
 
 # ====================================================
-# 10. 🧮 Determinar nível de visualização
+# 11. 🧮 Determinar nível de visualização
 # ====================================================
 if nm_mun_sel == "Nenhum":
     st.info("Selecione um município para carregar o mapa.")
@@ -142,23 +145,23 @@ else:
     gdf_filtro = gdf_mun
 
 # ====================================================
-# 11. ⛔ Limite de setores
+# 12. ⛔ Limite de setores
 # ====================================================
 if len(gdf_filtro) > MAX_SETORES:
     st.warning(f"⚠️ Área selecionada contém {len(gdf_filtro)} setores — limite máximo é {MAX_SETORES}.")
     st.stop()
 
 # ====================================================
-# 12. 🧭 Simplificação das geometrias
+# 13. 🧭 Simplificação das geometrias
 # ====================================================
 gdf_filtro = gdf_filtro.copy()
 gdf_filtro["geometry"] = gdf_filtro["geometry"].simplify(
-    tolerance=TOLERANCIA_SIMPLIFY,
+    tolerance=tolerancia_simplify,
     preserve_topology=True
 )
 
 # ====================================================
-# 13. 🗺️ Construção do mapa
+# 14. 🗺️ Construção do mapa
 # ====================================================
 bounds = gdf_filtro.total_bounds
 center_lat = (bounds[1] + bounds[3]) / 2
@@ -178,13 +181,13 @@ folium.Choropleth(
     legend_name=f"{variavel_desc}"
 ).add_to(m)
 
-# Tooltip com texto escuro
+# Tooltip com NM_BAIRRO
 folium.GeoJson(
     gdf_filtro,
     name="Setores",
     tooltip=folium.GeoJsonTooltip(
-        fields=["CD_SETOR", "NM_MUN", variavel_cod],
-        aliases=["Setor:", "Município:", f"{variavel_desc}:"],
+        fields=["CD_SETOR", "NM_BAIRRO", variavel_cod],
+        aliases=["Setor:", "Bairro:", f"{variavel_desc}:"],
         localize=True,
         sticky=True,
         labels=True,
@@ -196,7 +199,7 @@ folium.GeoJson(
 ).add_to(m)
 
 # ====================================================
-# 14. 🧮 Agregações condicionais
+# 15. 🧮 Agregações condicionais
 # ====================================================
 st.subheader(f"🗺️ Mapa - {nm_rgint_sel}")
 st_folium(m, width=1100, height=600)
@@ -224,6 +227,6 @@ if nm_dist_sel != "Nenhum":
     st.dataframe(agg_bairro)
 
 st.caption(
-    f"💡 Tolerância de simplificação: {TOLERANCIA_SIMPLIFY}. "
-    f"Limite de {MAX_SETORES} setores. Tooltip otimizado com texto escuro."
+    f"💡 Tolerância de simplificação: {tolerancia_simplify}. "
+    f"Limite de {MAX_SETORES} setores. Tooltip mostra NM_BAIRRO."
 )
