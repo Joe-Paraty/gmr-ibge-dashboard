@@ -5,3 +5,4 @@ requests
 gdown
 folium
 streamlit-folium
+openpyxl
